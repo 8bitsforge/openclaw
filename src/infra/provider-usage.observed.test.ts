@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clearObservedProviderUsageWindows,
+  observedProviderUsageWindowSetVersion,
   readObservedProviderUsage,
   recordObservedProviderUsageWindows,
 } from "./provider-usage.observed.js";
@@ -102,5 +103,33 @@ describe("provider-usage.observed", () => {
       windows: [{ label: "Week", usedPercent: 40, resetAt: 5_000 }],
       observedAt: 100,
     });
+  });
+
+  it("changes the window-set version only when a provider gains a window", () => {
+    const provider = "observed-version-fixture";
+    const window = (label: string, usedPercent: number, resetAt: number) => ({
+      label,
+      usedPercent,
+      resetAt,
+    });
+    const start = observedProviderUsageWindowSetVersion();
+
+    recordObservedProviderUsageWindows(provider, [window("5h", 10, 1_000)], 100);
+    expect(observedProviderUsageWindowSetVersion()).toBe(start + 1);
+
+    // A newer reading of a window already observed keeps the version.
+    recordObservedProviderUsageWindows(provider, [window("5h", 12, 1_000)], 200);
+    expect(observedProviderUsageWindowSetVersion()).toBe(start + 1);
+
+    recordObservedProviderUsageWindows(provider, [window("Week", 40, 5_000)], 300);
+    expect(observedProviderUsageWindowSetVersion()).toBe(start + 2);
+
+    // After a reset the next window is new again.
+    recordObservedProviderUsageWindows(provider, [window("5h", 1, 19_000)], 1_000);
+    expect(observedProviderUsageWindowSetVersion()).toBe(start + 3);
+
+    // Windows that would not be recorded do not change it.
+    recordObservedProviderUsageWindows(provider, [{ label: "Month", usedPercent: 5 }], 1_100);
+    expect(observedProviderUsageWindowSetVersion()).toBe(start + 3);
   });
 });

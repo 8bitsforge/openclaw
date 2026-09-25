@@ -11,6 +11,7 @@ import type { UsageProviderId, UsageWindow } from "./provider-usage.types.js";
 type ObservedWindow = { window: UsageWindow; observedAt: number };
 
 const observedWindows = new Map<UsageProviderId, ObservedWindow[]>();
+let observedWindowSetVersion = 0;
 
 // The longest subscription window is a week; allow a day of clock slack.
 const MAX_OBSERVED_RESET_HORIZON_MS = 8 * 24 * 60 * 60 * 1000;
@@ -37,10 +38,27 @@ export function recordObservedProviderUsageWindows(
   }
   // A record can carry a subset of windows; keep the others until they reset.
   const labels = new Set(expiring.map((window) => window.label));
-  const kept = (observedWindows.get(provider) ?? []).filter(
-    (entry) => !labels.has(entry.window.label),
+  const previous = observedWindows.get(provider) ?? [];
+  const current = new Set(
+    previous
+      .filter((entry) => (entry.window.resetAt ?? 0) > observedAt)
+      .map((entry) => entry.window.label),
   );
+  if (expiring.some((window) => !current.has(window.label))) {
+    observedWindowSetVersion += 1;
+  }
+  const kept = previous.filter((entry) => !labels.has(entry.window.label));
   observedWindows.set(provider, [...kept, ...expiring.map((window) => ({ window, observedAt }))]);
+}
+
+/**
+ * Changes when a provider gains an observed window it did not have, such as the
+ * first turn after a Gateway start or the first turn after a window reset.
+ * Usage caches compare it so a new row appears without waiting for their TTL;
+ * newer readings of windows already shown follow the normal refresh cadence.
+ */
+export function observedProviderUsageWindowSetVersion(): number {
+  return observedWindowSetVersion;
 }
 
 /** Returns observed windows that have not reached their reset time. */

@@ -9,6 +9,10 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  readObservedProviderUsage,
+  recordObservedProviderUsageWindows,
+} from "../../infra/provider-usage.observed.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -403,6 +407,51 @@ describe("usage.status provider usage cache", () => {
     const served = (await runUsageStatus()) as UsageSummary;
 
     expect(served.providers[0]?.windows.map((window) => window.label)).toEqual(["Week"]);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes before the TTL when the first Claude Code windows are observed", async () => {
+    // Mirrors the loader: the observed row comes from the store at load time.
+    mocks.loadProviderUsageSummary.mockImplementation(async () => {
+      const observed = readObservedProviderUsage("claude-cli", now);
+      return {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "5h", usedPercent: 10 }],
+          },
+          ...(observed
+            ? [{ provider: "claude-cli", displayName: "Claude Code", ...observed }]
+            : []),
+        ],
+      };
+    });
+    const providerIds = (summary: unknown) =>
+      (summary as UsageSummary).providers.map((provider) => provider.provider);
+
+    expect(providerIds(await runUsageStatus())).toEqual(["openai"]);
+
+    now = 2_000;
+    recordObservedProviderUsageWindows(
+      "claude-cli",
+      [{ label: "5h", usedPercent: 30, resetAt: 900_000 }],
+      now,
+    );
+    await vi.waitFor(async () => {
+      expect(providerIds(await runUsageStatus())).toEqual(["openai", "claude-cli"]);
+    });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+
+    // A newer reading of the same window waits for the normal refresh.
+    now = 3_000;
+    recordObservedProviderUsageWindows(
+      "claude-cli",
+      [{ label: "5h", usedPercent: 31, resetAt: 900_000 }],
+      now,
+    );
+    await runUsageStatus();
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
   });
 

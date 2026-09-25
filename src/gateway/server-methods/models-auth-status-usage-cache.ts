@@ -2,7 +2,10 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
-import { clearObservedProviderUsageWindows } from "../../infra/provider-usage.observed.js";
+import {
+  clearObservedProviderUsageWindows,
+  observedProviderUsageWindowSetVersion,
+} from "../../infra/provider-usage.observed.js";
 import { PROVIDER_USAGE_TIMEOUT_MS } from "../../infra/provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -31,6 +34,9 @@ type ProviderUsageCacheEntry = {
   credentialKey: string;
   providerKey: string;
   refreshedAt: number;
+  // Observed-window set this summary was loaded against; a newly observed
+  // window (first Claude Code turn) makes it stale before the TTL.
+  observedVersion: number;
   summary: UsageSummary;
   usageByProvider: Map<string, ProviderUsageStatus>;
 };
@@ -173,6 +179,8 @@ function scheduleProviderUsageRefresh(params: {
     return active.promise;
   }
   const publishGeneration = cacheGeneration;
+  // Read before loading: a window observed during the load refreshes again.
+  const observedVersion = observedProviderUsageWindowSetVersion();
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
     loadProviderUsageSummary({
@@ -194,6 +202,7 @@ function scheduleProviderUsageRefresh(params: {
             credentialKey: params.credentialKey,
             providerKey: params.providerKey,
             refreshedAt: Date.now(),
+            observedVersion,
             summary: usage,
             usageByProvider: mapProviderUsage(usage),
           });
@@ -255,6 +264,7 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
     params.forceRefresh === true ||
     !matching ||
     params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS ||
+    matching.observedVersion !== observedProviderUsageWindowSetVersion() ||
     (earliestReset !== undefined && params.now >= earliestReset);
   return { credentialKey, matching, needsRefresh, providerIds, providerKey };
 }
