@@ -170,6 +170,9 @@ const CLAUDE_RATE_LIMIT_WINDOW_LABELS = [
   ["seven_day", "Week"],
 ] as const;
 
+// Largest epoch milliseconds a Date can represent.
+const MAX_DATE_MS = 8_640_000_000_000_000;
+
 /** Reads the subscription windows from a Claude stream-json `rate_limit_event`. */
 export function readClaudeCliRateLimitWindows(
   parsed: Record<string, unknown>,
@@ -192,15 +195,17 @@ export function readClaudeCliRateLimitWindows(
       continue;
     }
     const resetsAt = window.resetsAt;
-    const resetAt =
-      typeof resetsAt === "number" && Number.isFinite(resetsAt) && resetsAt > 0
-        ? resetsAt * 1000
+    const resetAt = typeof resetsAt === "number" && resetsAt > 0 ? resetsAt * 1000 : undefined;
+    // Seconds that overflow to Infinity or past the Date range can never expire.
+    const validResetAt =
+      resetAt !== undefined && Number.isFinite(resetAt) && resetAt <= MAX_DATE_MS
+        ? resetAt
         : undefined;
     windows.push({
       label,
       // Round away binary-fraction noise (0.56 * 100 = 56.00000000000001).
       usedPercent: clampPercent(Math.round(utilization * 10_000) / 100),
-      ...(resetAt === undefined ? {} : { resetAt }),
+      ...(validResetAt === undefined ? {} : { resetAt: validResetAt }),
     });
   }
   return windows.length > 0 ? windows : undefined;

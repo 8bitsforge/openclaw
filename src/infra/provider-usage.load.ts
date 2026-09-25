@@ -13,7 +13,7 @@ import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.j
 import {
   CLAUDE_CODE_USAGE_DISPLAY_NAME,
   CLAUDE_CODE_USAGE_PROVIDER,
-  readObservedProviderUsageWindows,
+  readObservedProviderUsage,
 } from "./provider-usage.observed.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
@@ -197,20 +197,23 @@ export async function loadProviderUsageSummary(
   // come from the turn reports Claude Code streams and are shown as their own
   // Claude Code row. They are never merged into the Anthropic row, whose
   // credential may be a different account or a pay-per-use key.
-  const claudeCodeWindows = descriptors.some(
+  // The row carries when the windows were reported: a host login switch only
+  // shows up after Claude Code's next turn, so readers can judge staleness.
+  const claudeCodeUsage = descriptors.some(
     ({ provider }) => provider === "anthropic" || provider === CLAUDE_CODE_USAGE_PROVIDER,
   )
-    ? readObservedProviderUsageWindows(CLAUDE_CODE_USAGE_PROVIDER, now)
+    ? readObservedProviderUsage(CLAUDE_CODE_USAGE_PROVIDER, now)
     : undefined;
   if (
-    claudeCodeWindows &&
+    claudeCodeUsage &&
     !snapshots.some((entry) => entry.provider === CLAUDE_CODE_USAGE_PROVIDER)
   ) {
     const anthropicIndex = snapshots.findIndex((entry) => entry.provider === "anthropic");
     snapshots.splice(anthropicIndex === -1 ? snapshots.length : anthropicIndex + 1, 0, {
       provider: CLAUDE_CODE_USAGE_PROVIDER,
       displayName: CLAUDE_CODE_USAGE_DISPLAY_NAME,
-      windows: claudeCodeWindows,
+      windows: claudeCodeUsage.windows,
+      observedAt: claudeCodeUsage.observedAt,
     });
   }
   const providers = snapshots.filter(

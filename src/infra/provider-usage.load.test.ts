@@ -484,15 +484,17 @@ describe("provider-usage.load", () => {
       { label: "5h", usedPercent: 3, resetAt: usageNow + 3_600_000 },
       { label: "Week", usedPercent: 48, resetAt: usageNow + 86_400_000 },
     ];
+    const observedAt = usageNow - 60_000;
     const claudeCodeRow = {
       provider: "claude-cli",
       displayName: "Claude Code",
       windows: observedWindows,
+      observedAt,
     };
     afterEach(() => clearObservedProviderUsageWindows());
 
     it("reports Claude Code's windows when Anthropic has no usage credential", async () => {
-      recordObservedProviderUsageWindows("claude-cli", observedWindows);
+      recordObservedProviderUsageWindows("claude-cli", observedWindows, observedAt);
 
       const summary = await loadProviderUsageSummary({
         providers: ["anthropic"],
@@ -525,7 +527,7 @@ describe("provider-usage.load", () => {
     ])(
       "keeps the Anthropic row unchanged beside the Claude Code row for %s",
       async (_name, result) => {
-        recordObservedProviderUsageWindows("claude-cli", observedWindows);
+        recordObservedProviderUsageWindows("claude-cli", observedWindows, observedAt);
         const anthropic = { provider: "anthropic", displayName: "Claude", ...result };
         resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(anthropic);
 
@@ -540,7 +542,7 @@ describe("provider-usage.load", () => {
     );
 
     it("does not add the Claude Code row when Claude usage was not requested", async () => {
-      recordObservedProviderUsageWindows("claude-cli", observedWindows);
+      recordObservedProviderUsageWindows("claude-cli", observedWindows, observedAt);
       resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue({
         provider: "openai",
         displayName: "Codex",

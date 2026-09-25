@@ -372,8 +372,10 @@ provider-neutral for CLI, app, and Control UI consumers.
   `openclaw status --usage` process. Turns on paired nodes, under an
   OpenClaw-selected auth profile, with credentials in the Claude Code
   environment, or with a different `CLAUDE_CONFIG_DIR` are not recorded. The
-  row reflects the last recorded turn and clears whenever model authentication
-  changes.
+  row reflects the last recorded turn, carries when it was reported
+  (`observedAt` in `usage.status`, shown as `as of ...` in `/status`), and
+  clears whenever model authentication changes. A host `claude auth login`
+  switch shows up only after Claude Code's next recorded turn.
 - **ClawRouter**: API key (`CLAWROUTER_API_KEY`). Shows a monthly budget window
   and typed USD budget when configured; otherwise shows aggregate spend and a
   request/token/cost summary.

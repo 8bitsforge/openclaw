@@ -793,6 +793,23 @@ describe("readClaudeCliRateLimitWindows", () => {
     ).toEqual([{ label: "Week", usedPercent: 100 }]);
   });
 
+  it("drops reset times that overflow or fall outside the Date range", () => {
+    expect(
+      readClaudeCliRateLimitWindows({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          unifiedWindows: {
+            five_hour: { utilization: 0.1, resetsAt: Number.MAX_VALUE },
+            seven_day: { utilization: 0.2, resetsAt: 8_640_000_000_001 },
+          },
+        },
+      }),
+    ).toEqual([
+      { label: "5h", usedPercent: 10 },
+      { label: "Week", usedPercent: 20 },
+    ]);
+  });
+
   it("ignores events without unified windows and other record types", () => {
     expect(
       readClaudeCliRateLimitWindows({

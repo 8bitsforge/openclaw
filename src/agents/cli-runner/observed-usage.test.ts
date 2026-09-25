@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CLAUDE_CODE_USAGE_PROVIDER,
   clearObservedProviderUsageWindows,
-  readObservedProviderUsageWindows,
+  readObservedProviderUsage,
 } from "../../infra/provider-usage.observed.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
@@ -56,7 +56,7 @@ describe("Claude subscription windows observed from CLI turns", () => {
       const result = await executePreparedCliRun(context);
 
       expect(result.text).toBe("ok");
-      expect(readObservedProviderUsageWindows(CLAUDE_CODE_USAGE_PROVIDER, 0)).toEqual(
+      expect(readObservedProviderUsage(CLAUDE_CODE_USAGE_PROVIDER, 0)?.windows).toEqual(
         recorded
           ? [
               { label: "5h", usedPercent: 3, resetAt: 1790305200_000 },
