@@ -5,7 +5,10 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
-import { recordObservedProviderUsageWindows } from "../../infra/provider-usage.observed.js";
+import {
+  CLAUDE_CODE_USAGE_PROVIDER,
+  recordObservedProviderUsageWindows,
+} from "../../infra/provider-usage.observed.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
@@ -123,7 +126,7 @@ export async function executeCliProcess(params: {
           runEnv: params.env,
           gatewayClaudeConfigDir: process.env.CLAUDE_CONFIG_DIR,
         })
-          ? (windows) => recordObservedProviderUsageWindows("anthropic", windows)
+          ? (windows) => recordObservedProviderUsageWindows(CLAUDE_CODE_USAGE_PROVIDER, windows)
           : undefined,
       })
     : null;

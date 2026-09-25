@@ -381,6 +381,31 @@ describe("usage.status provider usage cache", () => {
     }
   });
 
+  it("stops serving a cached window at its reset time and refreshes before the TTL", async () => {
+    mocks.loadProviderUsageSummary.mockImplementation(async () => ({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [
+            { label: "5h", usedPercent: 10, resetAt: 5_000 },
+            { label: "Week", usedPercent: 40, resetAt: 900_000 },
+          ],
+          plan: "Plus",
+        },
+      ],
+    }));
+    const first = (await runUsageStatus()) as UsageSummary;
+    expect(first.providers[0]?.windows.map((window) => window.label)).toEqual(["5h", "Week"]);
+
+    now = 5_000;
+    const served = (await runUsageStatus()) as UsageSummary;
+
+    expect(served.providers[0]?.windows.map((window) => window.label)).toEqual(["Week"]);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps a provider's last-good snapshot when its refresh times out", async () => {
     const first = (await runUsageStatus()) as UsageSummary;
     now = 61_000;

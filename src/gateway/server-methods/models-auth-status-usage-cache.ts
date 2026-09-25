@@ -89,6 +89,44 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
   return usageByProvider;
 }
 
+// A usage window describes quota until its reset time; afterwards the provider
+// reports a new window. Cached summaries therefore stop serving a window at its
+// reset and refresh instead of waiting for the TTL.
+function earliestWindowResetAt(summary: UsageSummary): number | undefined {
+  let earliest: number | undefined;
+  for (const provider of summary.providers) {
+    for (const window of provider.windows) {
+      if (window.resetAt !== undefined && (earliest === undefined || window.resetAt < earliest)) {
+        earliest = window.resetAt;
+      }
+    }
+  }
+  return earliest;
+}
+
+function withoutResetWindows(summary: UsageSummary, now: number): UsageSummary {
+  const earliest = earliestWindowResetAt(summary);
+  if (earliest === undefined || earliest > now) {
+    return summary;
+  }
+  const providers = summary.providers.flatMap((provider) => {
+    const windows = provider.windows.filter(
+      (window) => window.resetAt === undefined || window.resetAt > now,
+    );
+    const keepsOtherFacts =
+      provider.error !== undefined ||
+      Boolean(provider.summary?.trim()) ||
+      Boolean(provider.plan) ||
+      Boolean(provider.billing?.length) ||
+      Boolean(provider.costHistory?.daily.length);
+    if (windows.length === 0 && provider.windows.length > 0 && !keepsOtherFacts) {
+      return [];
+    }
+    return [{ ...provider, windows }];
+  });
+  return { ...summary, providers };
+}
+
 function retainLastGoodOnTimeout(
   summary: UsageSummary,
   lastGood: UsageSummary | undefined,
@@ -212,10 +250,12 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
     cached.providerKey === providerKey
       ? cached
       : undefined;
+  const earliestReset = matching ? earliestWindowResetAt(matching.summary) : undefined;
   const needsRefresh =
     params.forceRefresh === true ||
     !matching ||
-    params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS;
+    params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS ||
+    (earliestReset !== undefined && params.now >= earliestReset);
   return { credentialKey, matching, needsRefresh, providerIds, providerKey };
 }
 
@@ -242,7 +282,11 @@ export function readProviderUsageStaleWhileRevalidate(
       lastGood: matching?.summary,
     }).catch(() => {});
   }
-  return matching?.usageByProvider ?? new Map();
+  if (!matching) {
+    return new Map();
+  }
+  const served = withoutResetWindows(matching.summary, params.now);
+  return served === matching.summary ? matching.usageByProvider : mapProviderUsage(served);
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
@@ -283,7 +327,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
   });
   if (matching) {
     void refresh.catch(() => {});
-    return matching.summary;
+    return withoutResetWindows(matching.summary, params.now);
   }
   if (params.coldRead !== "refresh-marker") {
     return await refresh;

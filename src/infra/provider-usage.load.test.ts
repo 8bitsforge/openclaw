@@ -10,7 +10,10 @@ import {
   resetProviderUsageSnapshotWithPluginMock,
 } from "./provider-usage-plugin-runtime.test-mocks.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
-import { recordObservedProviderUsageWindows } from "./provider-usage.observed.js";
+import {
+  clearObservedProviderUsageWindows,
+  recordObservedProviderUsageWindows,
+} from "./provider-usage.observed.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
 import {
   loadUsageWithAuth,
@@ -476,17 +479,23 @@ describe("provider-usage.load", () => {
     }
   });
 
-  describe("runtime-observed windows", () => {
+  describe("Claude Code subscription row", () => {
     const observedWindows = [
       { label: "5h", usedPercent: 3, resetAt: usageNow + 3_600_000 },
       { label: "Week", usedPercent: 48, resetAt: usageNow + 86_400_000 },
     ];
-    it("shows observed windows when no usage credential resolves", async () => {
-      // Each case uses its own provider id: the observed store is process-wide.
-      recordObservedProviderUsageWindows("observed-no-auth-fixture", observedWindows);
+    const claudeCodeRow = {
+      provider: "claude-cli",
+      displayName: "Claude Code",
+      windows: observedWindows,
+    };
+    afterEach(() => clearObservedProviderUsageWindows());
+
+    it("reports Claude Code's windows when Anthropic has no usage credential", async () => {
+      recordObservedProviderUsageWindows("claude-cli", observedWindows);
 
       const summary = await loadProviderUsageSummary({
-        providers: ["observed-no-auth-fixture"],
+        providers: ["anthropic"],
         config: {},
         env: {},
         authStore: { version: 1, profiles: {} },
@@ -496,77 +505,55 @@ describe("provider-usage.load", () => {
         }) as unknown as typeof fetch,
       });
 
-      expect(summary.providers).toEqual([
-        {
-          provider: "observed-no-auth-fixture",
-          displayName: "observed-no-auth-fixture",
-          windows: observedWindows,
-        },
-      ]);
+      expect(summary.providers).toEqual([claudeCodeRow]);
     });
 
-    it("replaces a setup-token scope refusal with observed windows", async () => {
-      const observedFetchFailure = "observed-fetch-failure-fixture" as ProviderAuth["provider"];
-      recordObservedProviderUsageWindows(observedFetchFailure, observedWindows);
+    it.each([
+      [
+        "a setup-token scope refusal",
+        {
+          windows: [],
+          error: "HTTP 403: OAuth token does not meet scope requirement user:profile",
+        },
+      ],
+      ["a timeout", { windows: [], error: "Timeout" }],
+      ["an Admin API row", { windows: [], plan: "Admin API", summary: "30d spend" }],
+      [
+        "fetched subscription windows",
+        { windows: [{ label: "5h", usedPercent: 4 }], plan: "Max (20x)" },
+      ],
+    ])(
+      "keeps the Anthropic row unchanged beside the Claude Code row for %s",
+      async (_name, result) => {
+        recordObservedProviderUsageWindows("claude-cli", observedWindows);
+        const anthropic = { provider: "anthropic", displayName: "Claude", ...result };
+        resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(anthropic);
+
+        const summary = await loadUsageWithAuth(
+          loadProviderUsageSummary,
+          [{ provider: "anthropic", token: "token" }],
+          createProviderUsageFetch(async () => makeResponse(200, "{}")),
+        );
+
+        expect(summary.providers).toEqual([anthropic, claudeCodeRow]);
+      },
+    );
+
+    it("does not add the Claude Code row when Claude usage was not requested", async () => {
+      recordObservedProviderUsageWindows("claude-cli", observedWindows);
       resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue({
-        provider: observedFetchFailure,
-        displayName: "Fixture",
-        windows: [],
-        error: "HTTP 403: OAuth token does not meet scope requirement user:profile",
+        provider: "openai",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
       });
 
       const summary = await loadUsageWithAuth(
         loadProviderUsageSummary,
-        [{ provider: observedFetchFailure, token: "setup-token" }],
-        createProviderUsageFetch(async () => makeResponse(403, "{}")),
-      );
-
-      expect(summary.providers).toEqual([
-        { provider: observedFetchFailure, displayName: "Fixture", windows: observedWindows },
-      ]);
-    });
-
-    it.each([
-      ["a timeout", { windows: [], error: "Timeout" }],
-      ["an auth error", { windows: [], error: "HTTP 401: invalid bearer token" }],
-      ["an Admin API row", { windows: [], plan: "Admin API", summary: "30d spend" }],
-    ])("keeps %s instead of observed windows", async (_name, result) => {
-      const observedKept = "observed-kept-fixture" as ProviderAuth["provider"];
-      recordObservedProviderUsageWindows(observedKept, observedWindows);
-      const fetched = { provider: observedKept, displayName: "Fixture", ...result };
-      resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(fetched);
-
-      const summary = await loadUsageWithAuth(
-        loadProviderUsageSummary,
-        [{ provider: observedKept, token: "token" }],
+        [{ provider: "openai", token: "token" }],
         createProviderUsageFetch(async () => makeResponse(200, "{}")),
       );
 
-      expect(summary.providers).toEqual([fetched]);
-    });
-
-    it("keeps fetched windows over observed windows", async () => {
-      const observedFetched = "observed-fetched-fixture" as ProviderAuth["provider"];
-      recordObservedProviderUsageWindows(observedFetched, observedWindows);
-      const fetched: ProviderUsageSnapshot = {
-        provider: observedFetched,
-        displayName: "Fixture",
-        plan: "Max (20x)",
-        windows: [
-          { label: "5h", usedPercent: 4 },
-          { label: "Week", usedPercent: 49 },
-          { label: "Opus", usedPercent: 12 },
-        ],
-      };
-      resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(fetched);
-
-      const summary = await loadUsageWithAuth(
-        loadProviderUsageSummary,
-        [{ provider: observedFetched, token: "oauth-token" }],
-        createProviderUsageFetch(async () => makeResponse(200, "{}")),
-      );
-
-      expect(summary.providers).toEqual([fetched]);
+      expect(summary.providers.map((provider) => provider.provider)).toEqual(["openai"]);
     });
   });
 });

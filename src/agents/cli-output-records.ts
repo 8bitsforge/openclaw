@@ -198,7 +198,8 @@ export function readClaudeCliRateLimitWindows(
         : undefined;
     windows.push({
       label,
-      usedPercent: clampPercent(utilization * 100),
+      // Round away binary-fraction noise (0.56 * 100 = 56.00000000000001).
+      usedPercent: clampPercent(Math.round(utilization * 10_000) / 100),
       ...(resetAt === undefined ? {} : { resetAt }),
     });
   }

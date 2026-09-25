@@ -767,6 +767,17 @@ describe("readClaudeCliRateLimitWindows", () => {
     ]);
   });
 
+  it("reports whole percentages without binary-fraction noise", () => {
+    expect(
+      readClaudeCliRateLimitWindows({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          unifiedWindows: { five_hour: { utilization: 0.56, resetsAt: 1790340000 } },
+        },
+      }),
+    ).toEqual([{ label: "5h", usedPercent: 56, resetAt: 1790340000_000 }]);
+  });
+
   it("keeps valid windows when a sibling window is malformed", () => {
     expect(
       readClaudeCliRateLimitWindows({
