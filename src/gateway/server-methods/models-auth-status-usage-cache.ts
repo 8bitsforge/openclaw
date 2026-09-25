@@ -2,6 +2,7 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
+import { clearObservedProviderUsageWindows } from "../../infra/provider-usage.observed.js";
 import { PROVIDER_USAGE_TIMEOUT_MS } from "../../infra/provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -51,6 +52,7 @@ export function clearModelAuthStatusUsageCache(): void {
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
   clearProviderUsageRuntimeSnapshot();
+  clearObservedProviderUsageWindows();
 }
 
 function scopeProviderUsageCredentialKey(

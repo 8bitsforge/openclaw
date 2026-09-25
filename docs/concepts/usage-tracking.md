@@ -20,7 +20,7 @@ title: "Usage tracking"
 - CLI: `openclaw status --usage` prints a full per-provider usage/quota breakdown.
 - CLI: `openclaw models status` lists OAuth/token auth profiles and shows a usage-window summary next to each provider that has one.
 - Control UI: **Usage** shows provider plan and billing cards above OpenClaw's session-derived token and estimated-cost analysis. Anthropic and OpenAI Admin API credentials add provider-reported today, 7-day, and 30-day spend, daily trends, token totals, top models, and cost categories.
-- Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
+- Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage; without a usable usage credential, the 5-hour and weekly windows come from Claude Code's own turn reports (see below).
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
 Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
@@ -360,6 +360,20 @@ provider-neutral for CLI, app, and Control UI consumers.
   when Anthropic reports them. An explicit Anthropic Admin API key, or an
   auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
   organization cost and Messages API history.
+  Claude Code (`claude-cli`) keeps its own login, which OpenClaw does not use for
+  usage requests. When Claude has no usable usage credential, or its setup-token
+  is refused for missing `user:profile` scope, the Gateway shows the 5-hour and
+  weekly windows from the `rate_limit_event` Claude Code streams on each turn
+  under the Gateway host's own Claude login. They are held in Gateway memory
+  until their reset time, so they appear after the first such turn following a
+  Gateway start, and reach Gateway clients (`usage.status`, `/status`) but not a
+  separate `openclaw status --usage` process. Turns on paired nodes, under an
+  OpenClaw-selected auth profile, with credentials in the Claude Code
+  environment, or with a different `CLAUDE_CONFIG_DIR` are not recorded because
+  they may belong to another account. The setup-token fallback assumes the
+  setup-token and the host's Claude login are the same account. The windows
+  reflect the last recorded turn, not usage from outside this Gateway, and are
+  cleared whenever model authentication changes.
 - **ClawRouter**: API key (`CLAWROUTER_API_KEY`). Shows a monthly budget window
   and typed USD budget when configured; otherwise shows aggregate spend and a
   request/token/cost summary.

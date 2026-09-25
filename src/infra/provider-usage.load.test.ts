@@ -10,6 +10,7 @@ import {
   resetProviderUsageSnapshotWithPluginMock,
 } from "./provider-usage-plugin-runtime.test-mocks.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
+import { recordObservedProviderUsageWindows } from "./provider-usage.observed.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
 import {
   loadUsageWithAuth,
@@ -473,5 +474,99 @@ describe("provider-usage.load", () => {
     } finally {
       vi.stubGlobal("fetch", previousFetch);
     }
+  });
+
+  describe("runtime-observed windows", () => {
+    const observedWindows = [
+      { label: "5h", usedPercent: 3, resetAt: usageNow + 3_600_000 },
+      { label: "Week", usedPercent: 48, resetAt: usageNow + 86_400_000 },
+    ];
+    it("shows observed windows when no usage credential resolves", async () => {
+      // Each case uses its own provider id: the observed store is process-wide.
+      recordObservedProviderUsageWindows("observed-no-auth-fixture", observedWindows);
+
+      const summary = await loadProviderUsageSummary({
+        providers: ["observed-no-auth-fixture"],
+        config: {},
+        env: {},
+        authStore: { version: 1, profiles: {} },
+        now: usageNow,
+        fetch: createProviderUsageFetch(async () => {
+          throw new Error("usage fetch should not run");
+        }) as unknown as typeof fetch,
+      });
+
+      expect(summary.providers).toEqual([
+        {
+          provider: "observed-no-auth-fixture",
+          displayName: "observed-no-auth-fixture",
+          windows: observedWindows,
+        },
+      ]);
+    });
+
+    it("replaces a setup-token scope refusal with observed windows", async () => {
+      const observedFetchFailure = "observed-fetch-failure-fixture" as ProviderAuth["provider"];
+      recordObservedProviderUsageWindows(observedFetchFailure, observedWindows);
+      resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue({
+        provider: observedFetchFailure,
+        displayName: "Fixture",
+        windows: [],
+        error: "HTTP 403: OAuth token does not meet scope requirement user:profile",
+      });
+
+      const summary = await loadUsageWithAuth(
+        loadProviderUsageSummary,
+        [{ provider: observedFetchFailure, token: "setup-token" }],
+        createProviderUsageFetch(async () => makeResponse(403, "{}")),
+      );
+
+      expect(summary.providers).toEqual([
+        { provider: observedFetchFailure, displayName: "Fixture", windows: observedWindows },
+      ]);
+    });
+
+    it.each([
+      ["a timeout", { windows: [], error: "Timeout" }],
+      ["an auth error", { windows: [], error: "HTTP 401: invalid bearer token" }],
+      ["an Admin API row", { windows: [], plan: "Admin API", summary: "30d spend" }],
+    ])("keeps %s instead of observed windows", async (_name, result) => {
+      const observedKept = "observed-kept-fixture" as ProviderAuth["provider"];
+      recordObservedProviderUsageWindows(observedKept, observedWindows);
+      const fetched = { provider: observedKept, displayName: "Fixture", ...result };
+      resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(fetched);
+
+      const summary = await loadUsageWithAuth(
+        loadProviderUsageSummary,
+        [{ provider: observedKept, token: "token" }],
+        createProviderUsageFetch(async () => makeResponse(200, "{}")),
+      );
+
+      expect(summary.providers).toEqual([fetched]);
+    });
+
+    it("keeps fetched windows over observed windows", async () => {
+      const observedFetched = "observed-fetched-fixture" as ProviderAuth["provider"];
+      recordObservedProviderUsageWindows(observedFetched, observedWindows);
+      const fetched: ProviderUsageSnapshot = {
+        provider: observedFetched,
+        displayName: "Fixture",
+        plan: "Max (20x)",
+        windows: [
+          { label: "5h", usedPercent: 4 },
+          { label: "Week", usedPercent: 49 },
+          { label: "Opus", usedPercent: 12 },
+        ],
+      };
+      resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(fetched);
+
+      const summary = await loadUsageWithAuth(
+        loadProviderUsageSummary,
+        [{ provider: observedFetched, token: "oauth-token" }],
+        createProviderUsageFetch(async () => makeResponse(200, "{}")),
+      );
+
+      expect(summary.providers).toEqual([fetched]);
+    });
   });
 });

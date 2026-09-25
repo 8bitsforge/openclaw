@@ -5,6 +5,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import { recordObservedProviderUsageWindows } from "../../infra/provider-usage.observed.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
@@ -35,6 +36,7 @@ import {
   createCliTimeoutError,
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
+import { shouldRecordObservedClaudeUsage } from "./observed-usage.js";
 import { createCliOutputFailoverError } from "./output-error.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
@@ -114,6 +116,15 @@ export async function executeCliProcess(params: {
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
+        onRateLimitWindows: shouldRecordObservedClaudeUsage({
+          backendId: context.backendResolved.id,
+          effectiveAuthProfileId: context.effectiveAuthProfileId,
+          nodePlacement: params.nodePlacement,
+          runEnv: params.env,
+          gatewayClaudeConfigDir: process.env.CLAUDE_CONFIG_DIR,
+        })
+          ? (windows) => recordObservedProviderUsageWindows("anthropic", windows)
+          : undefined,
       })
     : null;
   let stdoutTail = "";

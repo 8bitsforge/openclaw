@@ -10,6 +10,7 @@ import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
+import { readObservedProviderUsageWindows } from "./provider-usage.observed.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
@@ -78,6 +79,9 @@ async function fetchProviderUsageSnapshot(params: {
   );
 }
 
+// Anthropic refuses usage requests from setup-tokens with this scope error.
+const MISSING_PROFILE_SCOPE_ERROR = /scope requirement user:profile/i;
+
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
@@ -122,6 +126,38 @@ export async function loadProviderUsageSummary(
   let authStore = opts.authStore;
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
+  // Windows a CLI runtime observed on a recent turn stand in only where the
+  // usage request cannot answer at all: no usable usage credential, or a token
+  // the usage endpoint refuses for missing profile scope (setup-tokens). Every
+  // other result keeps its own state, including timeouts (the status cache
+  // retains the last good snapshot for those) and actionable auth errors.
+  const withObservedWindows = (
+    provider: UsageProviderId,
+    snapshot: ProviderUsageSnapshot | undefined,
+  ): ProviderUsageSnapshot | undefined => {
+    const unanswerable =
+      snapshot === undefined ||
+      (snapshot.windows.length === 0 &&
+        snapshot.error !== undefined &&
+        MISSING_PROFILE_SCOPE_ERROR.test(snapshot.error));
+    if (!unanswerable) {
+      return snapshot;
+    }
+    const observed = readObservedProviderUsageWindows(provider, now);
+    if (!observed) {
+      return snapshot;
+    }
+    return {
+      provider,
+      displayName:
+        snapshot?.displayName ??
+        displayNames.get(provider) ??
+        providerUsageLabel(provider) ??
+        provider,
+      windows: observed,
+    };
+  };
+
   const tasks = descriptors.map(({ provider }) => {
     return raceUsageTimeout(
       (signal) =>
@@ -174,10 +210,12 @@ export async function loadProviderUsageSummary(
         }),
       timeoutMs,
       failureSnapshot(provider, "Timeout"),
-    ).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      return failureSnapshot(provider, message.trim() || "Fetch failed");
-    });
+    )
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return failureSnapshot(provider, message.trim() || "Fetch failed");
+      })
+      .then((snapshot) => withObservedWindows(provider, snapshot));
   });
 
   const snapshots = (await Promise.all(tasks))

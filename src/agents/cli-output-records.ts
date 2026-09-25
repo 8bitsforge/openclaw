@@ -2,6 +2,8 @@ import { extractBalancedJsonFragments, safeParseJsonRecord } from "@openclaw/nor
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { clampPercent } from "../infra/provider-usage.shared.js";
+import type { UsageWindow } from "../infra/provider-usage.types.js";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
@@ -157,6 +159,50 @@ export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefi
     normalizeCliUsageRecord(parsed.usage) ??
     normalizeCliUsageRecord(parsed.stats)
   );
+}
+
+// Claude Code emits one `rate_limit_event` per turn; its `unifiedWindows` map
+// carries the subscription windows as a 0-1 utilization and a reset time in
+// epoch seconds. Only the account-wide windows map onto the labels the Claude
+// usage fetch already reports.
+const CLAUDE_RATE_LIMIT_WINDOW_LABELS = [
+  ["five_hour", "5h"],
+  ["seven_day", "Week"],
+] as const;
+
+/** Reads the subscription windows from a Claude stream-json `rate_limit_event`. */
+export function readClaudeCliRateLimitWindows(
+  parsed: Record<string, unknown>,
+): UsageWindow[] | undefined {
+  if (parsed.type !== "rate_limit_event" || !isRecord(parsed.rate_limit_info)) {
+    return undefined;
+  }
+  const unifiedWindows = parsed.rate_limit_info.unifiedWindows;
+  if (!isRecord(unifiedWindows)) {
+    return undefined;
+  }
+  const windows: UsageWindow[] = [];
+  for (const [wireId, label] of CLAUDE_RATE_LIMIT_WINDOW_LABELS) {
+    const window = unifiedWindows[wireId];
+    if (!isRecord(window)) {
+      continue;
+    }
+    const utilization = window.utilization;
+    if (typeof utilization !== "number" || !Number.isFinite(utilization)) {
+      continue;
+    }
+    const resetsAt = window.resetsAt;
+    const resetAt =
+      typeof resetsAt === "number" && Number.isFinite(resetsAt) && resetsAt > 0
+        ? resetsAt * 1000
+        : undefined;
+    windows.push({
+      label,
+      usedPercent: clampPercent(utilization * 100),
+      ...(resetAt === undefined ? {} : { resetAt }),
+    });
+  }
+  return windows.length > 0 ? windows : undefined;
 }
 
 function collectCliText(value: unknown): string {
