@@ -1,4 +1,8 @@
-import type { UsageProviderId, UsageWindow } from "./provider-usage.types.js";
+import type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageWindow,
+} from "./provider-usage.types.js";
 
 // Quota windows a CLI runtime reported while running a turn, for the login
 // that runtime owns and OpenClaw never uses for usage requests.
@@ -18,10 +22,10 @@ const MAX_OBSERVED_RESET_HORIZON_MS = 8 * 24 * 60 * 60 * 1000;
 
 /** Usage row for the subscription behind Claude Code's own login. */
 export const CLAUDE_CODE_USAGE_PROVIDER: UsageProviderId = "claude-cli";
-export const CLAUDE_CODE_USAGE_DISPLAY_NAME = "Claude Code";
+const CLAUDE_CODE_USAGE_DISPLAY_NAME = "Claude Code";
 
 /** Windows a runtime reported, and when the oldest of them was reported. */
-export type ObservedProviderUsage = { windows: UsageWindow[]; observedAt: number };
+type ObservedProviderUsage = { windows: UsageWindow[]; observedAt: number };
 
 /** Records the latest runtime-observed quota windows for a usage provider. */
 export function recordObservedProviderUsageWindows(
@@ -62,7 +66,7 @@ export function observedProviderUsageWindowSetVersion(): number {
 }
 
 /** Returns observed windows that have not reached their reset time. */
-export function readObservedProviderUsage(
+function readObservedProviderUsage(
   provider: UsageProviderId,
   now: number,
 ): ObservedProviderUsage | undefined {
@@ -82,7 +86,45 @@ export function readObservedProviderUsage(
   };
 }
 
+/** The Claude Code usage row, or nothing when no current window was observed. */
+export function readClaudeCodeUsageSnapshot(now: number): ProviderUsageSnapshot | undefined {
+  const usage = readObservedProviderUsage(CLAUDE_CODE_USAGE_PROVIDER, now);
+  return usage
+    ? {
+        provider: CLAUDE_CODE_USAGE_PROVIDER,
+        displayName: CLAUDE_CODE_USAGE_DISPLAY_NAME,
+        windows: usage.windows,
+        observedAt: usage.observedAt,
+      }
+    : undefined;
+}
+
+// Whether each session's latest Claude Code turn ran on the Gateway host's own
+// login, as the runner judged it from the turn's real environment, arguments,
+// and account. /status can see the session's auth profile but not its backend
+// environment, so it shows the host login's windows only to admitted sessions.
+const claudeCodeHostLoginBySession = new Map<string, boolean>();
+const MAX_NOTED_CLAUDE_CODE_SESSIONS = 4096;
+
+/** Notes whether a session's Claude Code turn ran on the Gateway host's own login. */
+export function noteClaudeCodeSessionRoute(sessionKey: string, onHostLogin: boolean): void {
+  claudeCodeHostLoginBySession.delete(sessionKey);
+  claudeCodeHostLoginBySession.set(sessionKey, onHostLogin);
+  if (claudeCodeHostLoginBySession.size > MAX_NOTED_CLAUDE_CODE_SESSIONS) {
+    const oldest = claudeCodeHostLoginBySession.keys().next().value;
+    if (oldest !== undefined) {
+      claudeCodeHostLoginBySession.delete(oldest);
+    }
+  }
+}
+
+/** Whether the session's latest Claude Code turn since the last clear ran on the host login. */
+export function claudeCodeSessionRanOnHostLogin(sessionKey: string): boolean {
+  return claudeCodeHostLoginBySession.get(sessionKey) === true;
+}
+
 /** Drops every observation; the next CLI turn records fresh windows. */
 export function clearObservedProviderUsageWindows(): void {
   observedWindows.clear();
+  claudeCodeHostLoginBySession.clear();
 }

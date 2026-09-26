@@ -11,9 +11,8 @@ import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  CLAUDE_CODE_USAGE_DISPLAY_NAME,
   CLAUDE_CODE_USAGE_PROVIDER,
-  readObservedProviderUsage,
+  readClaudeCodeUsageSnapshot,
 } from "./provider-usage.observed.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
@@ -202,19 +201,18 @@ export async function loadProviderUsageSummary(
   const claudeCodeUsage = descriptors.some(
     ({ provider }) => provider === "anthropic" || provider === CLAUDE_CODE_USAGE_PROVIDER,
   )
-    ? readObservedProviderUsage(CLAUDE_CODE_USAGE_PROVIDER, now)
+    ? readClaudeCodeUsageSnapshot(now)
     : undefined;
   if (
     claudeCodeUsage &&
     !snapshots.some((entry) => entry.provider === CLAUDE_CODE_USAGE_PROVIDER)
   ) {
     const anthropicIndex = snapshots.findIndex((entry) => entry.provider === "anthropic");
-    snapshots.splice(anthropicIndex === -1 ? snapshots.length : anthropicIndex + 1, 0, {
-      provider: CLAUDE_CODE_USAGE_PROVIDER,
-      displayName: CLAUDE_CODE_USAGE_DISPLAY_NAME,
-      windows: claudeCodeUsage.windows,
-      observedAt: claudeCodeUsage.observedAt,
-    });
+    snapshots.splice(
+      anthropicIndex === -1 ? snapshots.length : anthropicIndex + 1,
+      0,
+      claudeCodeUsage,
+    );
   }
   const providers = snapshots.filter(
     (entry) =>

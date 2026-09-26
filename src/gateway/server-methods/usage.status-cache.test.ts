@@ -10,7 +10,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  readObservedProviderUsage,
+  readClaudeCodeUsageSnapshot,
   recordObservedProviderUsageWindows,
 } from "../../infra/provider-usage.observed.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
@@ -435,7 +435,7 @@ describe("usage.status provider usage cache", () => {
   it("refreshes before the TTL when the first Claude Code windows are observed", async () => {
     // Mirrors the loader: the observed row comes from the store at load time.
     mocks.loadProviderUsageSummary.mockImplementation(async () => {
-      const observed = readObservedProviderUsage("claude-cli", now);
+      const observed = readClaudeCodeUsageSnapshot(now);
       return {
         updatedAt: now,
         providers: [
@@ -444,9 +444,7 @@ describe("usage.status provider usage cache", () => {
             displayName: "OpenAI",
             windows: [{ label: "5h", usedPercent: 10 }],
           },
-          ...(observed
-            ? [{ provider: "claude-cli", displayName: "Claude Code", ...observed }]
-            : []),
+          ...(observed ? [observed] : []),
         ],
       };
     });

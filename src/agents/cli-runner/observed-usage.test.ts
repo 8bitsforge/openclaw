@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  CLAUDE_CODE_USAGE_PROVIDER,
+  claudeCodeSessionRanOnHostLogin,
   clearObservedProviderUsageWindows,
-  readObservedProviderUsage,
+  readClaudeCodeUsageSnapshot,
 } from "../../infra/provider-usage.observed.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
@@ -59,13 +59,16 @@ describe("Claude subscription windows observed from CLI turns", () => {
       );
       return createManagedRun(createSuccessfulProcessExit());
     });
-    const context = buildPreparedCliRunContext(run.backend ? { backend: run.backend } : {});
+    const context = buildPreparedCliRunContext({
+      sessionKey: "agent:main:observed",
+      ...(run.backend ? { backend: run.backend } : {}),
+    });
     context.effectiveAuthProfileId = run.effectiveAuthProfileId;
 
     const result = await executePreparedCliRun(context);
 
     expect(result.text).toBe("ok");
-    expect(readObservedProviderUsage(CLAUDE_CODE_USAGE_PROVIDER, 0)?.windows).toEqual(
+    expect(readClaudeCodeUsageSnapshot(0)?.windows).toEqual(
       recorded
         ? [
             { label: "5h", usedPercent: 3, resetAt: 1790305200_000 },
@@ -73,6 +76,8 @@ describe("Claude subscription windows observed from CLI turns", () => {
           ]
         : undefined,
     );
+    // /status shows the host login's windows only to sessions the runner admitted.
+    expect(claudeCodeSessionRanOnHostLogin("agent:main:observed")).toBe(recorded);
   });
 
   it("records Claude subscription windows only for the Gateway host's own login", () => {
@@ -119,10 +124,31 @@ describe("Claude subscription windows observed from CLI turns", () => {
         skillEnvKeys: new Set(["CLAUDE_CONFIG_DIR"]),
       }),
     ).toBe(false);
+    // Windows environment names are case-insensitive.
+    expect(
+      shouldRecordObservedClaudeUsage({
+        ...hostRun,
+        runEnv: { claude_config_dir: "/srv/other-claude" },
+        gatewayClaudeConfigDir: "/srv/other-claude",
+        skillEnvKeys: new Set(["claude_config_dir"]),
+      }),
+    ).toBe(false);
+    expect(
+      shouldRecordObservedClaudeUsage({ ...hostRun, runEnv: { Claude_Config_Dir: "/srv/other" } }),
+    ).toBe(false);
+    // Feature switches do not change the account.
+    expect(
+      shouldRecordObservedClaudeUsage({
+        ...hostRun,
+        runEnv: { CLAUDE_CODE_USE_POWERSHELL_TOOL: "1" },
+      }),
+    ).toBe(true);
     for (const key of [
       "CLAUDE_CODE_OAUTH_TOKEN",
       "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
       "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_MANTLE",
+      "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
       "ANTHROPIC_OAUTH_TOKEN",
       "ANTHROPIC_AUTH_TOKEN",
       "ANTHROPIC_BASE_URL",
