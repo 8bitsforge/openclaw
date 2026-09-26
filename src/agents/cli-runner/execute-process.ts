@@ -15,6 +15,7 @@ import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-act
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
+import { getActiveSkillEnvKeysCore } from "../../skills/runtime/env-overrides.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -125,6 +126,8 @@ export async function executeCliProcess(params: {
           nodePlacement: params.nodePlacement,
           runEnv: params.env,
           gatewayClaudeConfigDir: process.env.CLAUDE_CONFIG_DIR,
+          skillEnvKeys: getActiveSkillEnvKeysCore(),
+          backendArgs: [...(params.backend.args ?? []), ...(params.backend.resumeArgs ?? [])],
         })
           ? (windows) => recordObservedProviderUsageWindows(CLAUDE_CODE_USAGE_PROVIDER, windows)
           : undefined,
