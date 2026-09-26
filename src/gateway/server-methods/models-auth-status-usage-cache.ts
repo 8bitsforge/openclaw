@@ -96,13 +96,22 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
 }
 
 // A usage window describes quota until its reset time; afterwards the provider
-// reports a new window. Cached summaries therefore stop serving a window at its
-// reset and refresh instead of waiting for the TTL.
-function earliestWindowResetAt(summary: UsageSummary): number | undefined {
+// reports a new window. Cached summaries therefore stop serving a window that
+// resets while cached and refresh instead of waiting for the TTL. A window whose
+// reset had already passed when it was fetched is the provider's report as-is;
+// it neither expires again nor triggers a refresh on every read.
+function resetsWhileCached(resetAt: number | undefined, refreshedAt: number): resetAt is number {
+  return resetAt !== undefined && resetAt > refreshedAt;
+}
+
+function earliestWindowResetAt(summary: UsageSummary, refreshedAt: number): number | undefined {
   let earliest: number | undefined;
   for (const provider of summary.providers) {
     for (const window of provider.windows) {
-      if (window.resetAt !== undefined && (earliest === undefined || window.resetAt < earliest)) {
+      if (
+        resetsWhileCached(window.resetAt, refreshedAt) &&
+        (earliest === undefined || window.resetAt < earliest)
+      ) {
         earliest = window.resetAt;
       }
     }
@@ -110,47 +119,67 @@ function earliestWindowResetAt(summary: UsageSummary): number | undefined {
   return earliest;
 }
 
-function withoutResetWindows(summary: UsageSummary, now: number): UsageSummary {
-  const earliest = earliestWindowResetAt(summary);
+/** The provider without windows that reset while cached, or nothing if that was all it had. */
+function withoutProviderResetWindows(
+  provider: ProviderUsageSnapshot,
+  refreshedAt: number,
+  now: number,
+): ProviderUsageSnapshot | undefined {
+  const windows = provider.windows.filter(
+    (window) => !resetsWhileCached(window.resetAt, refreshedAt) || window.resetAt > now,
+  );
+  const keepsOtherFacts =
+    provider.error !== undefined ||
+    Boolean(provider.summary?.trim()) ||
+    Boolean(provider.plan) ||
+    Boolean(provider.billing?.length) ||
+    Boolean(provider.costHistory?.daily.length);
+  if (windows.length === 0 && provider.windows.length > 0 && !keepsOtherFacts) {
+    return undefined;
+  }
+  return { ...provider, windows };
+}
+
+function withoutResetWindows(
+  summary: UsageSummary,
+  refreshedAt: number,
+  now: number,
+): UsageSummary {
+  const earliest = earliestWindowResetAt(summary, refreshedAt);
   if (earliest === undefined || earliest > now) {
     return summary;
   }
-  const providers = summary.providers.flatMap((provider) => {
-    const windows = provider.windows.filter(
-      (window) => window.resetAt === undefined || window.resetAt > now,
-    );
-    const keepsOtherFacts =
-      provider.error !== undefined ||
-      Boolean(provider.summary?.trim()) ||
-      Boolean(provider.plan) ||
-      Boolean(provider.billing?.length) ||
-      Boolean(provider.costHistory?.daily.length);
-    if (windows.length === 0 && provider.windows.length > 0 && !keepsOtherFacts) {
-      return [];
-    }
-    return [{ ...provider, windows }];
-  });
+  const providers = summary.providers.flatMap(
+    (provider) => withoutProviderResetWindows(provider, refreshedAt, now) ?? [],
+  );
   return { ...summary, providers };
 }
 
 function retainLastGoodOnTimeout(
   summary: UsageSummary,
-  lastGood: UsageSummary | undefined,
+  lastGood: { summary: UsageSummary; refreshedAt: number } | undefined,
+  now: number,
 ): UsageSummary {
   if (!lastGood) {
     return summary;
   }
   const lastGoodByProvider = new Map(
-    lastGood.providers
+    lastGood.summary.providers
       .filter((provider) => provider.error === undefined)
-      .map((provider) => [provider.provider, provider]),
+      // Re-published under a new refresh time, a window that reset since would
+      // otherwise look like the provider's fresh report. With nothing left to
+      // show, the timeout itself is the current state.
+      .flatMap((provider) => {
+        const current = withoutProviderResetWindows(provider, lastGood.refreshedAt, now);
+        return current ? [[provider.provider, current] as const] : [];
+      }),
   );
   const retainedLastGood = summary.providers.some(
     (provider) => provider.error === "Timeout" && lastGoodByProvider.has(provider.provider),
   );
   return {
     ...summary,
-    updatedAt: retainedLastGood ? lastGood.updatedAt : summary.updatedAt,
+    updatedAt: retainedLastGood ? lastGood.summary.updatedAt : summary.updatedAt,
     providers: summary.providers.map((provider) =>
       provider.error === "Timeout"
         ? (lastGoodByProvider.get(provider.provider) ?? provider)
@@ -167,7 +196,7 @@ function scheduleProviderUsageRefresh(params: {
   credentialKey: string;
   providerIds: UsageProviderId[];
   providerKey: string;
-  lastGood?: UsageSummary;
+  lastGood?: { summary: UsageSummary; refreshedAt: number };
 }): Promise<UsageSummary> {
   const active = usageRefreshByAgentId.get(params.agentId);
   if (
@@ -181,6 +210,9 @@ function scheduleProviderUsageRefresh(params: {
   const publishGeneration = cacheGeneration;
   // Read before loading: a window observed during the load refreshes again.
   const observedVersion = observedProviderUsageWindowSetVersion();
+  // Also taken before loading: a window resetting while providers answer
+  // resets while cached, so it expires at its reset rather than at the TTL.
+  const loadStartedAt = Date.now();
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
     loadProviderUsageSummary({
@@ -191,7 +223,7 @@ function scheduleProviderUsageRefresh(params: {
       timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     })
       .then((freshUsage) => {
-        const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
+        const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood, Date.now());
         if (
           publishGeneration === cacheGeneration &&
           usageRefreshByAgentId.get(params.agentId) === refresh
@@ -201,7 +233,7 @@ function scheduleProviderUsageRefresh(params: {
             configRef: params.configRef,
             credentialKey: params.credentialKey,
             providerKey: params.providerKey,
-            refreshedAt: Date.now(),
+            refreshedAt: loadStartedAt,
             observedVersion,
             summary: usage,
             usageByProvider: mapProviderUsage(usage),
@@ -259,7 +291,9 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
     cached.providerKey === providerKey
       ? cached
       : undefined;
-  const earliestReset = matching ? earliestWindowResetAt(matching.summary) : undefined;
+  const earliestReset = matching
+    ? earliestWindowResetAt(matching.summary, matching.refreshedAt)
+    : undefined;
   const needsRefresh =
     params.forceRefresh === true ||
     !matching ||
@@ -289,13 +323,13 @@ export function readProviderUsageStaleWhileRevalidate(
       credentialKey,
       providerIds,
       providerKey,
-      lastGood: matching?.summary,
+      lastGood: matching,
     }).catch(() => {});
   }
   if (!matching) {
     return new Map();
   }
-  const served = withoutResetWindows(matching.summary, params.now);
+  const served = withoutResetWindows(matching.summary, matching.refreshedAt, params.now);
   return served === matching.summary ? matching.usageByProvider : mapProviderUsage(served);
 }
 
@@ -333,11 +367,11 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
     credentialKey,
     providerIds,
     providerKey,
-    lastGood: matching?.summary,
+    lastGood: matching,
   });
   if (matching) {
     void refresh.catch(() => {});
-    return withoutResetWindows(matching.summary, params.now);
+    return withoutResetWindows(matching.summary, matching.refreshedAt, params.now);
   }
   if (params.coldRead !== "refresh-marker") {
     return await refresh;
